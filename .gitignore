@@ -1,0 +1,8 @@
+*.svg
+*.venv
+
+.coverage
+dist
+reports
+tmp_*
+_trials

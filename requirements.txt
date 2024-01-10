@@ -1,0 +1,8 @@
+flake8
+pytest
+pytest-cov
+pytest-subprocess
+genbadge
+defusedxml
+build
+twine
