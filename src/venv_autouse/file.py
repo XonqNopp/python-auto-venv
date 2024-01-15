@@ -14,238 +14,243 @@ from subprocess import run
 from platform import system
 
 
+# TODO move in each file
 if __name__ == '__main__':
     raise RuntimeError('This package cannot be executed, it can only be imported.')
 
 
-PACKAGE_NAME = 'venv_autouse'
-ENV_VAR_PREVENT_RECURSION = f'PYTHON_{PACKAGE_NAME.upper()}_SUBPROCESS'
-IS_WINDOWS = system().lower() == 'windows'
+class VenvAutouseRuntimeError(RuntimeError):
+    """ Runtime error in the context of this package. """
 
 
-def get_filename_from_caller(caller) -> str:
+class VenvAutouse:
     """
-    Get the filename from the provided caller.
+    Venv autouse executer.
     """
-    return caller.f_code.co_filename
+    PACKAGE_NAME = 'venv_autouse'
+    ENV_VAR_PREVENT_RECURSION = f'PYTHON_{PACKAGE_NAME.upper()}_SUBPROCESS'
 
+    VENV_DIR_PREFIX = None
 
-def get_caller_filename() -> Path:
-    """
-    Get the caller.
-    """
-    parents = []
+    def __init__(self):
+        self.is_windows = system().lower() == 'windows'
 
-    parent_caller = currentframe()
-    while parent_caller is not None:
-        parent_filename = get_filename_from_caller(parent_caller)
+        self.filename = self.get_caller_filename()
 
-        parent_caller = parent_caller.f_back
+        self.dir_req_filename = self.filename.parent / 'requirements.txt'
+        self.file_req_filename = self.filename.with_suffix('.req.txt')
 
-        if parent_filename == __file__:
-            # ignore if we match this file
-            continue
+        self.req_files: dict[Path, str] = {
+            filename: self.digest_file(filename)
+            for filename in [self.dir_req_filename, self.file_req_filename]
+        }
 
-        if parent_filename.startswith('<'):
-            # ignore if we find a python internal frame
-            continue
+        venv_dir_prefix = f'.{self.filename.with_suffix("").name}'
+        if self.VENV_DIR_PREFIX is not None:
+            venv_dir_prefix = self.VENV_DIR_PREFIX
 
-        if Path(parent_filename).name == 'runpy.py':
-            # ignore if command was "python -m"
-            continue
+        self.venv_dir = self.filename.parent / f'{venv_dir_prefix}.venv'
 
-        parents.append(parent_filename)
+        self.venv_hash_file = self.venv_dir / 'hash.req.txt'
+        self.venv_hash = self.venv_hash_parse()
 
-    if len(parents) == 0:
-        raise RuntimeError(f'Unable to determine parent caller for {currentframe()}')
+    @staticmethod
+    def get_filename_from_caller(caller) -> str:
+        """
+        Get the filename from the provided caller.
+        """
+        return caller.f_code.co_filename
 
-    filename = Path(parents[-1])
+    def get_caller_filename(self) -> Path:
+        """
+        Get the caller.
+        """
+        parents = []
 
-    if not filename.exists():
-        raise RuntimeError(f'Unable to determine parent caller: {parents}')
+        parent_caller = currentframe()
+        while parent_caller is not None:
+            parent_filename = self.get_filename_from_caller(parent_caller)
 
-    return filename
+            parent_caller = parent_caller.f_back
+
+            if parent_filename == __file__:
+                # ignore if we match this file
+                continue
 
+            if parent_filename.startswith('<'):
+                # ignore if we find a python internal frame
+                continue
+
+            if Path(parent_filename).name == 'runpy.py':
+                # ignore if command was "python -m"
+                continue
+
+            parents.append(parent_filename)
+
+        if len(parents) == 0:
+            raise VenvAutouseRuntimeError(f'Unable to determine parent caller for {currentframe()}')
+
+        filename = Path(parents[-1])
 
-def digest_file(file: Path) -> str:
-    """
-    Digest a file.
-    """
-    if not file.exists():
-        return ''
+        if not filename.exists():
+            raise VenvAutouseRuntimeError(f'Unable to determine parent caller: {parents}')
 
-    return hashlib.sha3_256(file.read_bytes()).hexdigest()
+        return filename
+
+    @staticmethod
+    def digest_file(file: Path) -> str:
+        """
+        Digest a file.
+        """
+        if not file.exists():
+            return ''
+
+        return hashlib.sha3_256(file.read_bytes()).hexdigest()
 
+    def venv_get_exe(self) -> Path:
+        """
+        Get the venv executable (depends on the platform).
+        """
+        bin_dir = 'bin'
+        exe = 'python'
+
+        if self.is_windows:
+            bin_dir = 'Scripts'
+            exe = 'python.exe'
 
-FILENAME = get_caller_filename()
-DIR_REQ_FILENAME = FILENAME.parent / 'requirements.txt'
-FILE_REQ_FILENAME = FILENAME.with_suffix('.req.txt')
+        return self.venv_dir / bin_dir / exe
 
-REQ_FILES: dict[Path, str] = {
-    filename: digest_file(filename)
-    for filename in [DIR_REQ_FILENAME, FILE_REQ_FILENAME]
-}
+    def venv_hash_readlines(self) -> list[str]:
+        """
+        Read the custom hash file we use in the venv dir.
+        """
+        if not self.venv_hash_file.exists():
+            return []
 
-VENV_DIR = FILENAME.parent / f'.{FILENAME.with_suffix("").name}.venv'
-VENV_HASH_FILE = VENV_DIR / 'hash.req.txt'
-
-
-def venv_get_exe() -> Path:
-    """
-    Get the venv executable (depends on the platform).
-    """
-    bin_dir = 'bin'
-    exe = 'python'
-
-    if IS_WINDOWS:
-        bin_dir = 'Scripts'
-        exe = 'python.exe'
-
-    return VENV_DIR / bin_dir / exe
-
-
-def venv_hash_readlines() -> list[str]:
-    """
-    Read the custom hash file we use in the venv dir.
-    """
-    if not VENV_HASH_FILE.exists():
-        return []
-
-    return VENV_HASH_FILE.read_text().splitlines()
-
-
-def venv_hash_parse() -> dict:
-    """
-    Parse the custom hash file we use in the venv dir.
-    """
-    contents = venv_hash_readlines()
-    if contents == []:
-        return {}
-
-    checks: dict[str, str] = {}
-    for line in contents:
-        key, value = line.strip().split(':', 1)
-        checks[key] = value
-
-    return checks
-
-
-VENV_HASH = venv_hash_parse()
-VENV_HASH_ORIG = dict(VENV_HASH)  # copy so we can check if it changed
-
-
-def run_pip_install(cmd_args: list) -> None:
-    """
-    Run a pip command (subprocess) to install.
-    """
-    run([str(venv_get_exe()), '-m', 'pip', 'install'] + cmd_args, check=True)
-
-
-def venv_create() -> None:
-    """
-    Create the venv if it does not exist already.
-    """
-    if VENV_DIR.exists():
-        return
-
-    venv.create(VENV_DIR, with_pip=True)
-
-    # We need also this package installed or execution will fail
-    run_pip_install([PACKAGE_NAME])
-
-
-def venv_hash_check(req_file: Path) -> bool:
-    """
-    Check if the hash of the requirements file match.
-    """
-    if req_file.name not in VENV_HASH:
-        return False
-
-    if req_file not in REQ_FILES:
-        # Should not happen but better be safe
-        REQ_FILES[req_file] = digest_file(req_file)
-
-    return VENV_HASH[req_file.name] == REQ_FILES[req_file]
-
-
-def run_pip_install_file(filename: Path) -> None:
-    """
-    Run a pip command (subprocess) to install from a requirements file.
-    """
-    run_pip_install(['-r', str(filename)])
-
-
-def venv_apply_req_file(req_file: Path) -> bool:
-    """
-    Install requirements file with pip.
-    """
-    if not req_file.exists():
-        return False
-
-    if venv_hash_check(req_file):
-        return False
-
-    run_pip_install_file(req_file)
-
-    # update hash
-    if req_file in REQ_FILES:
-        # Already computed
-        VENV_HASH[req_file.name] = REQ_FILES[req_file]
-    else:
-        VENV_HASH[req_file.name] = digest_file(req_file)
-
-    return True
-
-
-def venv_update() -> bool:
-    """
-    Update the venv if needed.
-
-    Returns:
-        bool: True if updated, False if not changed
-    """
-    venv_create()
-
-    dir_req_file_updated = venv_apply_req_file(DIR_REQ_FILENAME)
-    file_req_file_updated = venv_apply_req_file(FILE_REQ_FILENAME)
-
-    if not dir_req_file_updated and not file_req_file_updated:
-        return False
-
-    # write hash file
-    hashes = [f'{key}:{value}' for key, value in VENV_HASH.items() if value is not None]
-    VENV_HASH_FILE.write_text('\n'.join(hashes))
-
-    return True
-
-
-def main() -> None:
-    """
-    Main function executed when this package is imported.
-    """
-    if ENV_VAR_PREVENT_RECURSION in environ:
-        # Already running from here, no need to do any check
-        return
-
-    if all(sha == '' for sha in REQ_FILES.values()):
-        # No requirements file found, abort
-        return
-
-    subprocess_needed = venv_update()
-
-    if not subprocess_needed:
-        # check if in venv
-        subprocess_needed = VENV_DIR.name != Path(sys.prefix).name
-
-    if not subprocess_needed:
-        # Return to caller and let it continue
-        return
-
-    # subprocess and exit (do not return to caller)
-    env_vars = dict(environ)
-    env_vars[ENV_VAR_PREVENT_RECURSION] = '1'
-    run([str(venv_get_exe())] + sys.argv, check=True, env=env_vars)
-    sys.exit()
-
-
-main()
+        return self.venv_hash_file.read_text().splitlines()
+
+    def venv_hash_parse(self) -> dict:
+        """
+        Parse the custom hash file we use in the venv dir.
+        """
+        contents = self.venv_hash_readlines()
+        if contents == []:
+            return {}
+
+        checks: dict[str, str] = {}
+        for line in contents:
+            key, value = line.strip().split(':', 1)
+            checks[key] = value
+
+        return checks
+
+    def run_pip_install(self, cmd_args: list) -> None:
+        """
+        Run a pip command (subprocess) to install.
+        """
+        run([str(self.venv_get_exe()), '-m', 'pip', 'install'] + cmd_args, check=True)
+
+    def venv_create(self) -> None:
+        """
+        Create the venv if it does not exist already.
+        """
+        if self.venv_dir.exists():
+            return
+
+        venv.create(self.venv_dir, with_pip=True)
+
+        # We need also this package installed or execution will fail
+        self.run_pip_install([self.PACKAGE_NAME])
+
+    def venv_hash_check(self, req_file: Path) -> bool:
+        """
+        Check if the hash of the requirements file match.
+        """
+        if req_file.name not in self.venv_hash:
+            return False
+
+        if req_file not in self.req_files:
+            # Should not happen but better be safe
+            self.req_files[req_file] = self.digest_file(req_file)
+
+        return self.venv_hash[req_file.name] == self.req_files[req_file]
+
+    def run_pip_install_file(self, filename: Path) -> None:
+        """
+        Run a pip command (subprocess) to install from a requirements file.
+        """
+        self.run_pip_install(['-r', str(filename)])
+
+    def venv_apply_req_file(self, req_file: Path) -> bool:
+        """
+        Install requirements file with pip.
+        """
+        if not req_file.exists():
+            return False
+
+        if self.venv_hash_check(req_file):
+            return False
+
+        self.run_pip_install_file(req_file)
+
+        # update hash
+        if req_file in self.req_files:
+            # Already computed
+            self.venv_hash[req_file.name] = self.req_files[req_file]
+        else:
+            self.venv_hash[req_file.name] = self.digest_file(req_file)
+
+        return True
+
+    def venv_update(self) -> bool:
+        """
+        Update the venv if needed.
+
+        Returns:
+            bool: True if updated, False if not changed
+        """
+        self.venv_create()
+
+        dir_req_file_updated = self.venv_apply_req_file(self.dir_req_filename)
+        file_req_file_updated = self.venv_apply_req_file(self.file_req_filename)
+
+        if not dir_req_file_updated and not file_req_file_updated:
+            return False
+
+        # write hash file
+        hashes = [f'{key}:{value}' for key, value in self.venv_hash.items() if value is not None]
+        self.venv_hash_file.write_text('\n'.join(hashes))
+
+        return True
+
+    def execute(self) -> None:
+        """
+        Main function executed when this package is imported.
+        """
+        if self.ENV_VAR_PREVENT_RECURSION in environ:
+            # Already running from here, no need to do any check
+            return
+
+        if all(sha == '' for sha in self.req_files.values()):
+            # No requirements file found, abort
+            return
+
+        subprocess_needed = self.venv_update()
+
+        if not subprocess_needed:
+            # check if in venv
+            subprocess_needed = self.venv_dir.name != Path(sys.prefix).name
+
+        if not subprocess_needed:
+            # Return to caller and let it continue
+            return
+
+        # subprocess and exit (do not return to caller)
+        env_vars = dict(environ)
+        env_vars[self.ENV_VAR_PREVENT_RECURSION] = '1'
+        run([str(self.venv_get_exe())] + sys.argv, check=True, env=env_vars)
+        sys.exit()
+
+
+venv_autouse = VenvAutouse()
+venv_autouse.execute()

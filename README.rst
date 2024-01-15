@@ -29,3 +29,18 @@ This module needs to be installed system-wide or in every venv you use to call f
 However, if you are executing files from within a venv, you will loose the current venv.
 
 The versioning follows `semantic versioning <http://semver.org>`_.
+
+
+File
+****
+
+When you have a python script ``file.py`` and it needs a venv, you can simply add ``import venv_autouse.file``
+at the top of the file, and write the requirements file ``file.req.txt``.
+It also uses the ``requirements.txt`` file in the directory of the file.
+All this will create a venv directory ``.file.venv`` in the same directory.
+
+
+Directory
+*********
+
+This is the same, except that it uses a venv shared in the directory of the file to save space when possible.

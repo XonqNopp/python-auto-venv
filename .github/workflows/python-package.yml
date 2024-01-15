@@ -36,6 +36,6 @@ jobs:
     - name: Test with pytest
       run: |
         python -m pytest
-        genbadge tests -i reports/junit.xml
-        genbadge coverage -i reports/coverage.xml
-        genbadge flake8 -i reports/flake8stats.txt
+        genbadge tests -i reports/junit.xml -o reports/badge-tests.svg
+        genbadge coverage -i reports/coverage.xml -o reports/badge-coverage.svg
+        genbadge flake8 -i reports/flake8stats.txt -o reports/badge-flake8.svg
