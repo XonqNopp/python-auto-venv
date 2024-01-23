@@ -12,8 +12,15 @@ from subprocess import run
 from platform import system
 
 
-if __name__ == '__main__':
+def raise_if_main() -> None:
+    """
+    Raise an exception if the file is executed as main.
+    """
     raise RuntimeError('This package cannot be executed, it can only be imported.')
+
+
+if __name__ == '__main__':
+    raise_if_main()
 
 
 class VenvAutouseRuntimeError(RuntimeError):
