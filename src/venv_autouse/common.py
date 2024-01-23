@@ -12,19 +12,19 @@ from subprocess import run
 from platform import system
 
 
+class VenvAutouseRuntimeError(RuntimeError):
+    """ Runtime error in the context of this package. """
+
+
 def raise_if_main() -> None:
     """
     Raise an exception if the file is executed as main.
     """
-    raise RuntimeError('This package cannot be executed, it can only be imported.')
+    raise VenvAutouseRuntimeError('This package cannot be executed, it can only be imported.')
 
 
 if __name__ == '__main__':
     raise_if_main()
-
-
-class VenvAutouseRuntimeError(RuntimeError):
-    """ Runtime error in the context of this package. """
 
 
 class VenvAutouse:
@@ -163,9 +163,6 @@ class VenvAutouse:
 
         venv.create(self.venv_dir, with_pip=True)
 
-        # We need also this package installed or execution will fail
-        self.run_pip_install([self.PACKAGE_NAME])
-
     def venv_hash_check(self, req_file: Path) -> bool:
         """
         Check if the hash of the requirements file match.
@@ -184,6 +181,53 @@ class VenvAutouse:
         Run a pip command (subprocess) to install from a requirements file.
         """
         self.run_pip_install(['-r', str(filename)])
+
+    def venv_install_self(self) -> None:
+        """
+        Install this package in the venv.
+
+        We need this package in the venv too otherwise the import will fail.
+        """
+        package = list(self.venv_dir.glob(f'{self.PACKAGE_NAME}*'))
+
+        if len(package) > 0:
+            # Already downloaded
+            # If more than one package, the latest one should be the last in alphabetical list.
+            venv_lib_py = list((self.venv_dir / 'lib').glob('python*'))
+            if len(venv_lib_py) == 0:
+                # Should not happen but be safe
+                self.run_pip_install([str(package[-1])])
+                return
+
+            dist_info = (
+                venv_lib_py[0]
+                / 'site-packages'
+                / package[-1].name.replace('-py3-none-any.whl', '.dist-info')
+            )
+
+            if dist_info.exists():
+                # Already installed
+                return
+
+            # install
+            self.run_pip_install([str(package[-1])])
+            return
+
+        download = run(
+            [str(self.venv_get_exe()), '-m', 'pip', 'download', self.PACKAGE_NAME],
+            cwd=str(self.venv_dir),
+            check=False,
+            timeout=3,
+        )
+
+        package = list(self.venv_dir.glob(f'{self.PACKAGE_NAME}*'))
+        print(f'{package=} {self.venv_dir=}')
+        if download.returncode != 0 or len(package) == 0:
+            # Something bad happened
+            raise VenvAutouseRuntimeError(f'Failed to install self ({download.returncode})')
+
+        # If we match more than one package, the latest one should be the last in alphabetical list.
+        self.run_pip_install([str(package[-1])])
 
     def venv_apply_req_file(self, req_file: Path) -> bool:
         """
@@ -214,6 +258,8 @@ class VenvAutouse:
             bool: True if updated, False if not changed
         """
         self.venv_create()
+
+        self.venv_install_self()
 
         dir_req_file_updated = self.venv_apply_req_file(self.dir_req_filename)
         file_req_file_updated = self.venv_apply_req_file(self.file_req_filename)

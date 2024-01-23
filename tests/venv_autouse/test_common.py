@@ -3,8 +3,9 @@
 Tests for "common.py".
 """
 
-# pylint: disable=[redefined-outer-name]
-# this is a pytest feature, we can define a fixture and use it as arg to functions.
+# pylint: disable=[redefined-outer-name,unused-argument]
+# redefined-outer-name: we can define a fixture and use it as arg to functions (pytest feature).
+# unused-argument: we need to use fake_process to register unwanted processes
 
 from inspect import currentframe
 from pathlib import Path
@@ -12,41 +13,61 @@ from shutil import rmtree
 from subprocess import run
 import sys
 from os import environ
+from collections.abc import Generator
 
 # pylint: disable=[import-error]
 import pytest  # type: ignore
 
-# pylint: disable=[import-error,wrong-import-position]
+# pylint: disable=[import-error]
 from src.venv_autouse import common  # noqa: E402
 
 
+TEST_DIR = Path(__file__).parent
+
+FOO_FILE = TEST_DIR / Path('foo')
+SAMPLE_REQ_FILE = TEST_DIR / 'sample_req.txt'
+SAMPLE_REQ_FILE_HASH = 'f7e270c8a03ff7dc90ff31aec88380e708deddc4ac91d5dbe7e64363ecdbeed7'
+SAMPLE_REQ_FILE2 = TEST_DIR / 'sample_req2.txt'
+SAMPLE_HASH_FILE = TEST_DIR / 'sample_hash_file.txt'
+
+
+def touch(file: Path) -> None:
+    """ Be sure a file exists. """
+    file.parent.mkdir(exist_ok=True, parents=True)
+    file.touch()
+
+
 @pytest.fixture
-def venvauto():
+def venvauto() -> Generator[common.VenvAutouse, None, None]:
     """
     Test fixture to get a venv autouse instance and do the cleanup after.
     """
 
     # pylint: disable=[too-few-public-methods]
-    class LocalVenvAutouse(common.VenvAutouse):
+    class TestVenvAutouse(common.VenvAutouse):
         """ Just make a copy so we can change class constants. """
+        def __init__(self):
+            super().__init__()
 
-    venv_autouse_instance = LocalVenvAutouse()
+            venv_dir_prefix = f'.{self.filename.with_suffix("").name}'
+            if self.VENV_DIR_PREFIX is not None:
+                venv_dir_prefix = self.VENV_DIR_PREFIX
+
+            self.venv_dir = TEST_DIR / f'venv_dummy.{venv_dir_prefix}.venv'
+            self.venv_dummy = self.venv_dir  # copy to keep it for tear down
+
+            self.venv_hash_file = self.venv_dir / 'hash.req.txt'
+            self.venv_hash = self.venv_hash_parse()
+
+            self.fake_package = self.venv_dir / self.PACKAGE_NAME
+
+    venv_autouse_instance = TestVenvAutouse()
 
     yield venv_autouse_instance
 
     # tear down
-    if venv_autouse_instance.venv_dir is None:
-        # We cheated the venv dir, we do not want to delete this one
-        return
-
-    rmtree(venv_autouse_instance.venv_dir, ignore_errors=True)
-
-
-FOO_FILE = Path('foo')
-SAMPLE_REQ_FILE = Path(__file__).parent / 'sample_req.txt'
-SAMPLE_REQ_FILE_HASH = 'f7e270c8a03ff7dc90ff31aec88380e708deddc4ac91d5dbe7e64363ecdbeed7'
-SAMPLE_REQ_FILE2 = Path(__file__).parent / 'sample_req2.txt'
-SAMPLE_HASH_FILE = Path(__file__).parent / 'sample_hash_file.txt'
+    venv_autouse_instance.fake_package.unlink(missing_ok=True)
+    rmtree(venv_autouse_instance.venv_dummy, ignore_errors=True)
 
 
 def test_execute_file() -> None:
@@ -116,7 +137,7 @@ def test_venv_hash_parse_file(venvauto) -> None:
 def test_venv_create_skipped(venvauto) -> None:
     """ venv_create but skipped """
     venvauto.venv_dir.mkdir()
-    venvauto.venv_create()  # nothing happens
+    venvauto.venv_create()
 
 
 def expect_run_pip_install(venvauto, fake_process, cmd_args: list) -> None:
@@ -126,9 +147,18 @@ def expect_run_pip_install(venvauto, fake_process, cmd_args: list) -> None:
     )
 
 
+def expect_run_pip_download_self(venvauto, fake_process) -> None:
+    """ Expect a subprocess call to run pip download for this package, and touch fake file. """
+    fake_process.register_subprocess(
+        [str(venvauto.venv_get_exe()), '-m', 'pip', 'download', venvauto.PACKAGE_NAME],
+    )
+
+    touch(venvauto.fake_package)
+
+
 def expect_run_pip_install_self(venvauto, fake_process) -> None:
     """ Expect a subprocess call to run pip install for this package. """
-    expect_run_pip_install(venvauto, fake_process, [venvauto.PACKAGE_NAME])
+    expect_run_pip_install(venvauto, fake_process, [str(venvauto.fake_package)])
 
 
 def expect_run_ensurepip(venvauto, fake_process) -> None:
@@ -146,7 +176,6 @@ def expect_run_ensurepip(venvauto, fake_process) -> None:
 def expect_venv_create(venvauto, fake_process) -> None:
     """ Expect everything we do when calling venv_create. """
     expect_run_ensurepip(venvauto, fake_process)
-    expect_run_pip_install_self(venvauto, fake_process)
 
 
 def test_venv_create_do(venvauto, fake_process) -> None:
@@ -172,6 +201,40 @@ def test_venv_hash_check_match(venvauto) -> None:
     """ venv_hash_check with the file matching the hash """
     venvauto.venv_hash = {SAMPLE_REQ_FILE.name: SAMPLE_REQ_FILE_HASH}
     assert venvauto.venv_hash_check(SAMPLE_REQ_FILE)
+
+
+def test_venv_install_self_file_downloaded(venvauto, fake_process) -> None:
+    """ venv_install_self but wheel file is already downloaded """
+    touch(venvauto.fake_package)
+    expect_run_pip_install_self(venvauto, fake_process)
+
+    venvauto.venv_install_self()
+
+
+def test_venv_install_self_file_installed(venvauto, fake_process) -> None:
+    """ venv_install_self but wheel file is already installed """
+    wheel = venvauto.venv_dir / (venvauto.PACKAGE_NAME + '-py3-none-any.whl')
+
+    dist_info = (
+        venvauto.venv_dir
+        / 'lib'
+        / 'python3'
+        / 'site-packages'
+        / (venvauto.PACKAGE_NAME + '.dist-info')
+    )
+
+    touch(wheel)
+    touch(dist_info)
+
+    venvauto.venv_install_self()
+
+
+def test_venv_install_self_nofile(venvauto, fake_process) -> None:
+    """ venv_install_self but needs to download and install file """
+    expect_run_pip_download_self(venvauto, fake_process)
+    expect_run_pip_install_self(venvauto, fake_process)
+
+    venvauto.venv_install_self()
 
 
 def expect_run_pip_install_file(venvauto, fake_process, filename: Path) -> None:
@@ -223,9 +286,11 @@ def test_venv_apply_req_file_exist_digested_and_match(venvauto, fake_process) ->
     assert venvauto.venv_hash[SAMPLE_REQ_FILE.name] == SAMPLE_REQ_FILE_HASH
 
 
-def test_venv_update_nofile(venvauto) -> None:
+def test_venv_update_nofile(venvauto, fake_process) -> None:
     """ venv_update with no req file available """
     venvauto.venv_dir.mkdir()
+    touch(venvauto.fake_package)
+    expect_run_pip_install_self(venvauto, fake_process)
     assert not venvauto.venv_update()
 
 
@@ -235,6 +300,8 @@ def test_venv_update_one_file(venvauto, fake_process) -> None:
     venvauto.dir_req_filename = SAMPLE_REQ_FILE
 
     expect_venv_create(venvauto, fake_process)
+    touch(venvauto.fake_package)
+    expect_run_pip_install_self(venvauto, fake_process)
     expect_run_pip_install_file(venvauto, fake_process, SAMPLE_REQ_FILE)
     venvauto.venv_update()
 
@@ -248,6 +315,8 @@ def test_venv_update_two_files(venvauto, fake_process) -> None:
     venvauto.file_req_filename = SAMPLE_REQ_FILE2
 
     expect_venv_create(venvauto, fake_process)
+    touch(venvauto.fake_package)
+    expect_run_pip_install_self(venvauto, fake_process)
     expect_run_pip_install_file(venvauto, fake_process, SAMPLE_REQ_FILE)
     expect_run_pip_install_file(venvauto, fake_process, SAMPLE_REQ_FILE2)
     venvauto.venv_update()
@@ -258,28 +327,33 @@ def test_venv_update_two_files(venvauto, fake_process) -> None:
     }
 
 
-def test_execute_env_var(venvauto) -> None:
+def test_execute_env_var(venvauto, fake_process) -> None:
     """ execute skipped due to env var """
     environ['PYTHON_VENV_AUTOUSE_SUBPROCESS'] = '1'
-    venvauto.execute()  # nothing happens
+    venvauto.execute()
 
     del environ['PYTHON_VENV_AUTOUSE_SUBPROCESS']
 
 
-def test_execute_no_req_file(venvauto) -> None:
+def test_execute_no_req_file(venvauto, fake_process) -> None:
     """ execute with no req file """
     assert all(sha == '' for sha in list(venvauto.req_files.values()))
-    venvauto.execute()  # nothing happens
+    venvauto.execute()
 
 
-def test_execute_return(venvauto) -> None:
+def test_execute_return(venvauto, fake_process) -> None:
     """ execute with venv not updated """
     # Cheat so we beleive we are in venv
     venvauto.venv_dir = Path(sys.prefix)
+    fake_package = venvauto.venv_dir / venvauto.PACKAGE_NAME
 
     venvauto.req_files = {key: 'foo' for key in venvauto.req_files}
 
-    venvauto.execute()  # nothing happens
+    expect_run_pip_download_self(venvauto, fake_process)
+    touch(fake_package)
+    expect_run_pip_install(venvauto, fake_process, [str(fake_package)])
+
+    venvauto.execute()
 
     venvauto.venv_dir = None  # prevent fixture to do teardown
 
@@ -288,6 +362,8 @@ def test_execute_subprocess(venvauto, fake_process) -> None:
     """ execute with venv update """
     venvauto.req_files = {key: 'foo' for key in venvauto.req_files}
     venvauto.venv_dir.mkdir()
+    touch(venvauto.fake_package)
+    expect_run_pip_install(venvauto, fake_process, [str(venvauto.fake_package)])
 
     fake_process.register_subprocess([str(venvauto.venv_get_exe())] + sys.argv)
 
