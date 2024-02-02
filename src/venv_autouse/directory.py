@@ -4,11 +4,11 @@ Venv autouse on a per-directory basis.
 
 This will use a venv specific to all the files of the directory it is imported into.
 """
-from .common import VenvAutouse
+from .common import VenvAutouse, raise_if_main
 
 
 if __name__ == '__main__':
-    raise RuntimeError('This package cannot be executed, it can only be imported.')
+    raise_if_main()
 
 
 class VenvAutouseDirectory(VenvAutouse):
