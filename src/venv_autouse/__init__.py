@@ -13,7 +13,7 @@ __all__ = [
     'file',
 ]
 
-__version__ = '1.0.1'
+__version__ = '1.0.2'
 
 
 # If we only import the module, default is to import file

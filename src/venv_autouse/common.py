@@ -298,5 +298,5 @@ class VenvAutouse:
         # subprocess and exit (do not return to caller)
         env_vars = dict(environ)
         env_vars[self.ENV_VAR_PREVENT_RECURSION] = '1'
-        run([str(self.venv_get_exe())] + sys.argv, check=True, env=env_vars)
-        sys.exit()
+        process = run([str(self.venv_get_exe())] + sys.argv, check=False, env=env_vars)
+        sys.exit(process.returncode)
