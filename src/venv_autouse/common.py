@@ -289,7 +289,7 @@ class VenvAutouse:
 
         if not subprocess_needed:
             # check if in venv
-            subprocess_needed = self.venv_dir.name != Path(sys.prefix).name
+            subprocess_needed = self.venv_dir.resolve() != Path(sys.prefix).resolve()
 
         if not subprocess_needed:
             # Return to caller and let it continue
