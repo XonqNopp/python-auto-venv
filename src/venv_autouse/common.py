@@ -289,7 +289,7 @@ class VenvAutouse:
 
         if not subprocess_needed:
             # check if in venv
-            subprocess_needed = self.venv_dir.name != Path(sys.prefix).name
+            subprocess_needed = self.venv_dir.resolve() != Path(sys.prefix).resolve()
 
         if not subprocess_needed:
             # Return to caller and let it continue
@@ -298,5 +298,5 @@ class VenvAutouse:
         # subprocess and exit (do not return to caller)
         env_vars = dict(environ)
         env_vars[self.ENV_VAR_PREVENT_RECURSION] = '1'
-        run([str(self.venv_get_exe())] + sys.argv, check=True, env=env_vars)
-        sys.exit()
+        process = run([str(self.venv_get_exe())] + sys.argv, check=False, env=env_vars)
+        sys.exit(process.returncode)

@@ -371,4 +371,4 @@ def test_execute_subprocess(venvauto, fake_process) -> None:
         venvauto.execute()
 
     # assert environ[common.ENV_VAR_PREVENT_RECURSION]=='1' only in subprocess, how assert?
-    assert sys_exit.value.code is None
+    assert sys_exit.value.code == 0

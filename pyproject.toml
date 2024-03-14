@@ -15,7 +15,7 @@ exclude = [
 
 [project]
 name = "venv-autouse"
-version = "1.0.1"
+version = "1.0.2"
 
 authors = [
   {name="XonqNopp", email="xonqnoppp@gmail.com"},
